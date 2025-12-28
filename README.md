@@ -1,6 +1,15 @@
 ## Raspberry Pi Real-Time GPIO Control
 
-Deterministic C++ control loop for Raspberry Pi that samples a distance sensor and drives a servo or ESC with hard timing guarantees. Ships with both a pigpio-backed hardware implementation and a desktop simulation, making it easy to tune the PID gains before deploying to an actual robot or industrial rig.
+> Deterministic C++ control loop for Raspberry Pi that samples a distance sensor and drives a servo or ESC with hard timing guarantees. Build locally with a simulator, deploy to pigpio hardware when ready.
+
+| At a Glance              | Details                                                                    |
+|--------------------------|----------------------------------------------------------------------------|
+| Loop frequency           | 200 Hz (configurable)                                                      |
+| Timing strategy          | Absolute `clock_nanosleep`, optional `SCHED_FIFO` priority                 |
+| Sensors/Actuators        | HC-SR04 ultrasonic + servo/ESC by default (easy to extend)                 |
+| Simulator                | Sinusoidal distance model with Gaussian noise                             |
+| Build system             | CMake + pigpio (optional)                                                  |
+| Target boards            | Raspberry Pi 3/4/5, CM4, Zero 2 (anything with pigpio + Linux)            |
 
 ### Table of Contents
 
@@ -8,19 +17,35 @@ Deterministic C++ control loop for Raspberry Pi that samples a distance sensor a
 2. [Hardware Reference](#hardware-reference)
 3. [Build Instructions](#build-instructions)
 4. [Running the Controller](#running-the-controller)
-5. [Deterministic Scheduling Tips](#deterministic-scheduling-tips)
-6. [Repository Layout](#repository-layout)
-7. [Extending the Project](#extending-the-project)
+5. [Use Case: Lab Fan Stabilizer](#use-case-lab-fan-stabilizer)
+6. [Why I Built This](#why-i-built-this)
+7. [Deterministic Scheduling Tips](#deterministic-scheduling-tips)
+8. [Repository Layout](#repository-layout)
+9. [Extending the Project](#extending-the-project)
 
 ### Features
 
-- 200 Hz PID loop enforced with absolute `clock_nanosleep` timing and optional `SCHED_FIFO` priority.
-- Pluggable sensor/actuator interfaces (`ISensor` and `IActuator`) with pigpio hardware drivers and a rich simulator.
-- pigpio-based HC-SR04 reader captures pulse widths with sub-microsecond precision; servo/ESC commands map PID output to 1000 us to 2000 us pulses.
-- Command-line interface exposes setpoint, loop frequency, feedforward, gains, pin numbers, and RT priority.
-- Console telemetry published on a background thread so the real-time loop remains deterministic.
+- **Deterministic loop core**: Absolute-time sleeping removes drift even on long runtimes.
+- **Real-time friendly**: Optional `SCHED_FIFO` priority and `pthread` affinity ready for PREEMPT_RT.
+- **Noise-aware sensing**: Built-in exponential moving average smooths HC-SR04 jitter; disable or retune via CLI.
+- **Desktop simulator**: Tune PID gains and verify telemetry on any Linux/macOS/Windows box.
+- **Configurable CLI**: Override setpoint, gains, feedforward, pins, PWM pulse lengths, and telemetry cadence at runtime.
+- **Telemetry-safe**: Console updates and CSV logging run on a secondary thread so the control loop never blocks on I/O.
+- **Flight data recorder**: `--log-file measurements.csv` dumps timestamped measurements/commands for post-run analysis.
 
 ### Hardware Reference
+
+```
+          +-----------------------------+         +----------------+
+          |        Raspberry Pi         |         |   HC-SR04      |
+          |                             |         |                |
+5 V  ---- | 5V -------------------------+---------| VCC            |
+GND  ---- | GND ------------------------+---------| GND            |
+GPIO23 -- | TRIG -------------------------------+-| TRIG           |
+GPIO24 <- | ECHO <-- voltage divider (1k/2k) <--+-| ECHO           |
+GPIO18 -> | SERVO PWM ---------------------------| Signal          |
+          +-----------------------------+         +----------------+
+```
 
 | Component        | BCM Pin | Notes                                                  |
 |------------------|--------:|--------------------------------------------------------|
@@ -29,7 +54,7 @@ Deterministic C++ control loop for Raspberry Pi that samples a distance sensor a
 | Servo/ESC signal | 18      | Hardware PWM capable (GPIO18 recommended)              |
 | 5 V / GND rails  | 5 V, GND| Shared rails for sensor and actuator (watch current draw) |
 
-The PID output is normalized to 0.0-1.0, then mapped to servo pulses between `--servo-min` and `--servo-max` (defaults: 1000 us, 2000 us). Adjust those bounds for your actuator.
+The PID output is normalized to 0.0-1.0, then mapped to servo pulses between `--servo-min` and `--servo-max` (defaults: 1000 us, 2000 us). Adjust those bounds for your actuator, ESC, or fan controller.
 
 ### Build Instructions
 
@@ -51,6 +76,12 @@ cmake --build build -j
 
 ### Running the Controller
 
+**Quick Start**
+
+1. Build the project (`cmake -S . -B build …; cmake --build build`).
+2. Start the desired sensor/actuator backend via CLI flag.
+3. Observe telemetry in the console or pipe it elsewhere.
+
 **Simulation mode (runs everywhere)**
 
 ```bash
@@ -61,7 +92,12 @@ cmake --build build -j
   --loop-hz 150
 ```
 
-The simulated sensor produces a slow sinusoidal movement with Gaussian noise, letting you iterate on the PID gains. Console output looks like `distance_cm=36.2 command=0.54`.
+The simulated sensor produces a slow sinusoidal movement with Gaussian noise, letting you iterate on the PID gains. Console output looks like:
+
+```
+distance_cm=36.2 command=0.54
+distance_cm=34.9 command=0.51
+```
 
 **Hardware mode (Raspberry Pi + pigpio)**
 
@@ -78,6 +114,40 @@ sudo ./build/rt_control \
 
 Run as root (or grant the binary `CAP_SYS_NICE`) so the control thread can request real-time scheduling. Use `--feedforward` to bias the neutral point for ESCs that expect a mid-stick value.
 
+**Command Reference**
+
+| Flag                  | Purpose                                             | Default |
+|-----------------------|-----------------------------------------------------|---------|
+| `--mode`              | `sim` (desktop) or `gpio` (pigpio hardware)         | `sim`   |
+| `--setpoint`          | Desired distance in centimeters                     | `30`    |
+| `--kp`, `--ki`, `--kd`| PID gains                                           | `0.08`, `0.02`, `0.005` |
+| `--loop-hz`           | Control loop frequency                              | `200`   |
+| `--priority`          | Linux realtime priority (1–99)                      | `80`    |
+| `--feedforward`       | Neutral offset for actuators                        | `0.5`   |
+| `--filter-alpha`      | Exponential moving average coefficient (0 disables) | `0.25`  |
+| `--trig`, `--echo`, `--servo` | BCM pins for devices                        | `23`, `24`, `18` |
+| `--servo-min`, `--servo-max` | PWM bounds in microseconds                    | `1000`, `2000` |
+| `--log-file path`     | CSV telemetry output (`timestamp_us,distance,cmd`)  | _off_   |
+| `--telemetry-ms`      | Console/logging interval in milliseconds            | `500`   |
+
+### Use Case: Lab Fan Stabilizer
+
+I originally piloted this code on a tabletop rig that used an HC-SR04 pointed at a foam baffle mounted to a desktop fan. By measuring the baffle distance and modulating the servo controlling the fan’s intake flap, I could keep airflow constant even when people walked past the desk or when ambient pressure changed. The same loop has since been adapted for:
+
+- A mini line-following robot that keeps its ultrasonic sensor at a fixed standoff from walls.
+- An industrial demonstrator that positions a pneumatic valve to stabilize tank pressure.
+- Classroom demos where we replay sensor recordings through the simulator to show how PID gains affect settling time.
+
+### Why I Built This
+
+As an embedded-systems student, I needed a portfolio piece that proved I could juggle firmware, Linux scheduling, and hardware bring-up. I started by breadboarding an HC-SR04 + servo pair for a robotics club outreach event, then decided to turn the hack into something reusable:
+
+1. **Skill gap** – I wanted hands-on practice with PREEMPT_RT, pigpio, and deterministic loops beyond microcontroller Arduino sketches.
+2. **Interview story** – Recruiters kept asking for “real” examples of C++ on Linux with GPIO, so I built a project I could demo in person or via video.
+3. **Teaching aid** – Professors often needed a compact example that showed PID math, noise filtering, and logging; this repo lets classmates clone/build quickly, experiment in simulation, and then deploy to our Pi lab rigs.
+
+Feel free to reuse this framework if you are also showcasing embedded/robotics chops—just swap in your own sensor/actuator pair and document the results.
+
 ### Deterministic Scheduling Tips
 
 - Install a PREEMPT_RT kernel (`sudo apt install raspberrypi-kernel-rt` or use `rpi-update` with an RT branch) for tighter jitter bounds.
@@ -85,6 +155,8 @@ Run as root (or grant the binary `CAP_SYS_NICE`) so the control thread can reque
 - Force the performance governor: `sudo cpupower frequency-set -g performance`.
 - Keep the real-time loop logging-free; telemetry already runs on a separate thread at 2 Hz.
 - To measure jitter, run `sudo cyclictest -Sp90 -i200 -n -l100000` alongside the controller.
+- On PREEMPT_RT, set `--priority` just below other critical services (e.g., 80) to avoid priority inversion.
+- Disable background daemons (Bluetooth, Wi-Fi, GUI) when benchmarking jitter-sensitive workloads.
 
 ### Repository Layout
 
@@ -103,3 +175,5 @@ Run as root (or grant the binary `CAP_SYS_NICE`) so the control thread can reque
 - Replace the servo with a BLDC ESC or H-bridge by writing a new `IActuator`.
 - Publish telemetry to ROS2, log to CSV, or feed commands into a safety supervisor microcontroller.
 - Add unit tests around `Controller::computePid` to validate tuning when you adjust gains.
+- Introduce a `--config path.toml` loader to bundle multiple parameters per robot profile.
+- Wrap the binary with a systemd service that sets CPU affinity and governor before launch.

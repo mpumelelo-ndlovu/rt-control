@@ -11,6 +11,7 @@ The controller runs as a single high-priority thread pinned to a deterministic l
 - The control loop targets a 200 Hz cycle (~5 ms) enforced with `clock_nanosleep` and absolute timing to avoid drift.
 - The working thread elevates itself to `SCHED_FIFO` with configurable priority. On kernels with PREEMPT_RT, this results in bounded latency; on stock Raspberry Pi OS it still reduces jitter significantly.
 - Sensor sampling and actuator updates only occur inside this loop, so the sensor latency is at most one cycle.
+- A configurable exponential moving average smooths raw distance measurements before they feed the PID block. Setting `measurement_filter_alpha` to zero disables filtering when raw response is required.
 
 ### Modularity
 
@@ -21,3 +22,7 @@ The code splits interfaces to decouple I/O specifics:
 - `Controller`: owns the PID state, timing loop, and delegates to the interfaces.
 
 For development on non-Raspberry Pi hardware, the simulator builds with stub sensor/actuator implementations that replay recorded CSV data, allowing logic testing without GPIO.
+
+### Telemetry and Logging
+
+A detached status thread samples the controller’s latest measurement/command at the user-defined cadence. It prints to the console and, when `--log-file` is supplied, streams a CSV (`timestamp_us,distance_cm,command`) so traces can be plotted in MATLAB, Python, or a spreadsheet without disturbing the real-time loop.

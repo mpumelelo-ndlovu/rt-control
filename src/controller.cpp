@@ -87,6 +87,20 @@ double Controller::computePid(double measurement, double dt_seconds) {
     return (clamped - config_.actuator_min) / denom;
 }
 
+double Controller::filterMeasurement(double measurement) {
+    const double alpha = config_.measurement_filter_alpha;
+    if (alpha <= 0.0 || alpha >= 1.0) {
+        return measurement;
+    }
+    if (!filter_initialized_) {
+        filtered_measurement_ = measurement;
+        filter_initialized_ = true;
+        return measurement;
+    }
+    filtered_measurement_ = (alpha * measurement) + ((1.0 - alpha) * filtered_measurement_);
+    return filtered_measurement_;
+}
+
 void Controller::loop() {
 #if defined(__linux__)
     if (config_.realtime_priority > 0) {
@@ -101,7 +115,8 @@ void Controller::loop() {
     auto previous_sample_time = std::chrono::steady_clock::now();
 
     while (!stop_requested_.load()) {
-        const double measurement = sensor_.read();
+        double measurement = sensor_.read();
+        measurement = filterMeasurement(measurement);
         last_measurement_.store(measurement, std::memory_order_relaxed);
 
         const auto now = std::chrono::steady_clock::now();

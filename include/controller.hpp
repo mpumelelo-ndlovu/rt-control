@@ -16,6 +16,7 @@ struct ControlConfig {
     double feedforward = 0.5;
     double actuator_min = 0.0;
     double actuator_max = 1.0;
+    double measurement_filter_alpha = 0.25;  // 0 disables filtering
     int realtime_priority = 80;
 };
 
@@ -46,6 +47,7 @@ public:
 private:
     void loop();
     double computePid(double measurement, double dt_seconds);
+    double filterMeasurement(double measurement);
 
     ISensor& sensor_;
     IActuator& actuator_;
@@ -57,4 +59,6 @@ private:
     std::atomic<double> last_command_{0.0};
     double integral_state_ = 0.0;
     double previous_error_ = 0.0;
+    double filtered_measurement_ = 0.0;
+    bool filter_initialized_ = false;
 };

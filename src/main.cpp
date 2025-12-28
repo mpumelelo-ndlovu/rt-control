@@ -1,9 +1,13 @@
 #include "controller.hpp"
 #include "devices.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <csignal>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -26,13 +30,16 @@ struct Options {
     int servo_pin = 18;
     unsigned servo_min = 1000;
     unsigned servo_max = 2000;
+    std::string log_file;
+    int telemetry_period_ms = 500;
 };
 
 void printUsage() {
     std::cout << "Usage: rt_control [--mode sim|gpio] [--setpoint cm] [--kp value] [--ki value]\n"
                  "                 [--kd value] [--loop-hz hz] [--priority N]\n"
-                 "                 [--trig pin] [--echo pin] [--servo pin]\n"
-                 "                 [--servo-min us] [--servo-max us]\n";
+                 "                 [--filter-alpha 0-1] [--trig pin] [--echo pin] [--servo pin]\n"
+                 "                 [--servo-min us] [--servo-max us] [--log-file path]\n"
+                 "                 [--telemetry-ms interval]\n";
 }
 
 bool parseDouble(const char* value, double& out) {
@@ -96,6 +103,8 @@ Options parseArgs(int argc, char** argv) {
             requireValue(parseDouble, options.config.loop_hz);
         } else if (arg == "--priority") {
             requireValue(parseInt, options.config.realtime_priority);
+        } else if (arg == "--filter-alpha") {
+            requireValue(parseDouble, options.config.measurement_filter_alpha);
         } else if (arg == "--feedforward") {
             requireValue(parseDouble, options.config.feedforward);
         } else if (arg == "--trig") {
@@ -108,6 +117,13 @@ Options parseArgs(int argc, char** argv) {
             requireValue(parseUnsigned, options.servo_min);
         } else if (arg == "--servo-max") {
             requireValue(parseUnsigned, options.servo_max);
+        } else if (arg == "--log-file") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("Missing value for --log-file");
+            }
+            options.log_file = argv[++i];
+        } else if (arg == "--telemetry-ms") {
+            requireValue(parseInt, options.telemetry_period_ms);
         } else {
             throw std::runtime_error("Unknown argument: " + arg);
         }
@@ -125,6 +141,13 @@ int main(int argc, char** argv) {
         std::cerr << ex.what() << "\n";
         printUsage();
         return 1;
+    }
+
+    if (options.telemetry_period_ms < 10) {
+        options.telemetry_period_ms = 10;
+    }
+    if (options.config.measurement_filter_alpha < 0.0 || options.config.measurement_filter_alpha >= 1.0) {
+        options.config.measurement_filter_alpha = 0.0;
     }
 
     signal(SIGINT, handleSignal);
@@ -156,15 +179,39 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    std::shared_ptr<std::ofstream> telemetry_file;
+    if (!options.log_file.empty()) {
+        telemetry_file = std::make_shared<std::ofstream>(options.log_file, std::ios::out | std::ios::trunc);
+        if (!telemetry_file->good()) {
+            std::cerr << "Unable to open log file: " << options.log_file << "\n";
+            return 3;
+        }
+        *telemetry_file << "timestamp_us,distance_cm,command\n";
+        std::cout << "Logging telemetry to " << options.log_file << "\n";
+    }
+
     Controller controller(*sensor, *actuator, options.config);
     controller.start();
 
-    std::thread status_thread([&controller]() {
-        using namespace std::chrono_literals;
+    const auto telemetry_period = std::chrono::milliseconds(std::max(10, options.telemetry_period_ms));
+    std::thread status_thread([&controller, telemetry_period, telemetry_file]() {
+        std::size_t flush_counter = 0;
         while (!g_should_stop.load()) {
-            std::cout << "distance_cm=" << controller.latestMeasurement()
-                      << " command=" << controller.latestCommand() << "\n";
-            std::this_thread::sleep_for(500ms);
+            const double measurement = controller.latestMeasurement();
+            const double command = controller.latestCommand();
+            std::cout << "distance_cm=" << measurement << " command=" << command << "\n";
+            if (telemetry_file && telemetry_file->good()) {
+                const auto now = std::chrono::system_clock::now();
+                const auto timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                (*telemetry_file) << timestamp_us << "," << measurement << "," << command << "\n";
+                if (++flush_counter % 10 == 0) {
+                    telemetry_file->flush();
+                }
+            }
+            std::this_thread::sleep_for(telemetry_period);
+        }
+        if (telemetry_file) {
+            telemetry_file->flush();
         }
     });
 
