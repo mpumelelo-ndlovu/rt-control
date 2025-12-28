@@ -140,12 +140,8 @@ I originally piloted this code on a tabletop rig that used an HC-SR04 pointed at
 
 ### Why I Built This
 
-As an embedded-systems student, I needed a portfolio piece that proved I could juggle firmware, Linux scheduling, and hardware bring-up. I started by breadboarding an HC-SR04 + servo pair for a robotics club outreach event, then decided to turn the hack into something reusable:
-
-1. **Skill gap** – I wanted hands-on practice with PREEMPT_RT, pigpio, and deterministic loops beyond microcontroller Arduino sketches.
-2. **Interview story** – Recruiters kept asking for “real” examples of C++ on Linux with GPIO, so I built a project I could demo in person or via video.
-3. **Teaching aid** – Professors often needed a compact example that showed PID math, noise filtering, and logging; this repo lets classmates clone/build quickly, experiment in simulation, and then deploy to our Pi lab rigs.
-
+As an CompSci student who is into systems development, I needed a portfolio piece that proved I could juggle firmware, Linux scheduling, and hardware bring-up. 
+I also wanted hands-on practice with PREEMPT_RT, pigpio, and deterministic loops beyond microcontroller Arduino sketches.
 Feel free to reuse this framework if you are also showcasing embedded/robotics chops—just swap in your own sensor/actuator pair and document the results.
 
 ### Deterministic Scheduling Tips
