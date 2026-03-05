@@ -131,9 +131,6 @@ Run as root (or grant the binary `CAP_SYS_NICE`) so the control thread can reque
 | `--telemetry-ms`      | Console/logging interval in milliseconds            | `500`   |
 
 ### Use Case: Lab Fan Stabilizer
-
-I originally piloted this code on a tabletop rig that used an HC-SR04 pointed at a foam baffle mounted to a desktop fan. By measuring the baffle distance and modulating the servo controlling the fan’s intake flap, I could keep airflow constant even when people walked past the desk or when ambient pressure changed. The same loop has since been adapted for:
-
 - A mini line-following robot that keeps its ultrasonic sensor at a fixed standoff from walls.
 - An industrial demonstrator that positions a pneumatic valve to stabilize tank pressure.
 - Classroom demos where we replay sensor recordings through the simulator to show how PID gains affect settling time.
